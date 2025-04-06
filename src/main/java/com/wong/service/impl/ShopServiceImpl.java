@@ -8,6 +8,7 @@ import com.wong.dto.Result;
 import com.wong.entity.Shop;
 import com.wong.mapper.ShopMapper;
 import com.wong.service.IShopService;
+import com.wong.utils.BloomFiler;
 import com.wong.utils.CacheClient;
 import com.wong.utils.SystemConstants;
 import org.springframework.data.geo.Distance;
@@ -19,6 +20,7 @@ import org.springframework.data.redis.domain.geo.GeoReference;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import javax.annotation.PostConstruct;
 import javax.annotation.Resource;
 import java.util.*;
 import java.util.concurrent.TimeUnit;
@@ -34,15 +36,31 @@ import static com.wong.utils.RedisConstants.*;
 @Service
 public class ShopServiceImpl extends ServiceImpl<ShopMapper, Shop> implements IShopService {
 
-
     @Resource
     private StringRedisTemplate stringRedisTemplate;
 
     @Resource
     private CacheClient cacheClient;
 
+    private BloomFiler bloomFilter;
+
+    // 系统第一次加载的时候，将从数据库里面加载所有商品ID
+    @PostConstruct
+    public void init(){
+        this.bloomFilter  = new BloomFiler(stringRedisTemplate);
+        List<Shop> list = list();
+        for(Shop shop: list){
+            String id = String.valueOf(shop.getId());
+            bloomFilter.add(id);
+        }
+    }
     @Override
     public Result queryById(Long id) {
+        // 为了ID安全，通过设置为String类型
+        String value = String.valueOf(id);
+        if(!bloomFilter.contains(value)){
+            return Result.fail("店铺不存在");
+        }
         // 解决缓存穿透
         Shop shop = cacheClient
                 .queryWithPassThrough(CACHE_SHOP_KEY, id, Shop.class, this::getById, CACHE_SHOP_TTL, TimeUnit.MINUTES);
